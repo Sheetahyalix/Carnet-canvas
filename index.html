@@ -73,6 +73,10 @@ const ImagePlus = mkIcon([["path", { d: "M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V
 const RefreshCw = mkIcon([["path", { d: "M21 2v6h-6" }], ["path", { d: "M3 12a9 9 0 0 1 15-6.7L21 8" }], ["path", { d: "M3 22v-6h6" }], ["path", { d: "M21 12a9 9 0 0 1-15 6.7L3 16" }]]);
 const Link2 = mkIcon([["path", { d: "M9 17H7A5 5 0 0 1 7 7h2" }], ["path", { d: "M15 7h2a5 5 0 1 1 0 10h-2" }], ["line", { x1: 8, y1: 12, x2: 16, y2: 12 }]]);
 const Cloud = mkIcon([["path", { d: "M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.3 12.4 4 4 0 0 0 6 19z" }]]);
+const Megaphone = mkIcon([["path", { d: "M3 11l14-6v14L3 13z" }], ["path", { d: "M3 11v2a2 2 0 0 0 2 2h2" }], ["path", { d: "M7 15v3a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-1" }]]);
+const Paperclip = mkIcon([["path", { d: "M21 8.5l-9.2 9.2a4 4 0 0 1-5.7-5.7l9.2-9.2a2.5 2.5 0 0 1 3.5 3.5l-9.2 9.2a1 1 0 0 1-1.4-1.4l8.5-8.5" }]]);
+const ChevronDown = mkIcon([["polyline", { points: "6 9 12 15 18 9" }]]);
+const ExternalLink = mkIcon([["path", { d: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" }], ["polyline", { points: "15 3 21 3 21 9" }], ["line", { x1: 10, y1: 14, x2: 21, y2: 3 }]]);
 const Calculator = mkIcon([["rect", { x: 4, y: 2, width: 16, height: 20, rx: 2 }], ["line", { x1: 8, y1: 6, x2: 16, y2: 6 }], ["line", { x1: 8, y1: 10, x2: 8, y2: 10 }], ["line", { x1: 12, y1: 10, x2: 12, y2: 10 }], ["line", { x1: 16, y1: 10, x2: 16, y2: 10 }], ["line", { x1: 8, y1: 14, x2: 8, y2: 14 }], ["line", { x1: 12, y1: 14, x2: 12, y2: 14 }], ["line", { x1: 16, y1: 14, x2: 16, y2: 18 }], ["line", { x1: 8, y1: 18, x2: 12, y2: 18 }]]);
 
 
@@ -216,6 +220,7 @@ function Carnet() {
   const [papers, setPapers] = useState([]);
   const [schedule, setSchedule] = useState([]);
   const [grades, setGrades] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
 
   // live Canvas connection
   const [canvasEndpoint, setCanvasEndpointState] = useState("");
@@ -245,7 +250,7 @@ function Carnet() {
 
   useEffect(() => {
     (async () => {
-      const [c, a, n, cd, p, sc, g] = await Promise.all([
+      const [c, a, n, cd, p, sc, g, an] = await Promise.all([
         loadKey("uni:courses", []),
         loadKey("uni:assignments", []),
         loadKey("uni:notes", []),
@@ -253,8 +258,9 @@ function Carnet() {
         loadKey("uni:papers", []),
         loadKey("uni:schedule", []),
         loadKey("uni:grades", []),
+        loadKey("uni:announcements", []),
       ]);
-      setCourses(c); setAssignments(a); setNotes(n); setCards(cd); setPapers(p); setSchedule(sc); setGrades(g);
+      setCourses(c); setAssignments(a); setNotes(n); setCards(cd); setPapers(p); setSchedule(sc); setGrades(g); setAnnouncements(an);
       const [ep, ls] = await Promise.all([loadKey("uni:canvasEndpoint", ""), loadKey("uni:lastSync", "")]);
       const hasKey = !!(ep && /[?&]key=/.test(ep));
       setCanvasEndpointState(hasKey ? ep : "");
@@ -271,6 +277,7 @@ function Carnet() {
   useEffect(() => { if (loaded.current) persist("uni:papers", papers); }, [papers]);
   useEffect(() => { if (loaded.current) persist("uni:schedule", schedule); }, [schedule]);
   useEffect(() => { if (loaded.current) persist("uni:grades", grades); }, [grades]);
+  useEffect(() => { if (loaded.current) persist("uni:announcements", announcements); }, [announcements]);
 
   const courseById = (id) => courses.find((c) => c.id === id);
 
@@ -298,6 +305,19 @@ function Carnet() {
         workingCourses.push(nc);
         return nc.id;
       };
+
+      // Make sure every Canvas course exists and carries its running grade,
+      // even courses that happen to have no assignments yet.
+      const incomingCourses = Array.isArray(data.courses) ? data.courses : [];
+      for (const c of incomingCourses) {
+        const id = findOrCreate(c.name, c.code);
+        if (!id) continue;
+        const obj = workingCourses.find((x) => x.id === id);
+        if (obj) {
+          if (c.currentScore != null) obj.currentScore = c.currentScore;
+          if (c.currentGrade) obj.currentGrade = c.currentGrade;
+        }
+      }
 
       const workingA = assignments.map((a) => ({ ...a }));
       const byCanvas = new Map(workingA.filter((a) => a.canvasId).map((a) => [String(a.canvasId), a]));
@@ -329,6 +349,11 @@ function Carnet() {
           if (it.due && existing.due !== it.due) { existing.due = it.due; changed = true; }
           existing.courseId = courseId;
           if (it.url) existing.canvasUrl = it.url;
+          if (it.description != null) existing.description = it.description;
+          if (Array.isArray(it.files)) existing.files = it.files;
+          if (it.score !== undefined) existing.score = it.score;
+          if (it.pointsPossible !== undefined) existing.pointsPossible = it.pointsPossible;
+          if (it.grade != null) existing.canvasGrade = it.grade;
           if (changed) updated++;
         } else {
           workingA.push({
@@ -336,12 +361,18 @@ function Carnet() {
             title, due: it.due || "",
             type: TYPES.includes(it.type) ? it.type : "Essay",
             status: "todo", canvasUrl: it.url || "",
+            description: it.description || "",
+            files: Array.isArray(it.files) ? it.files : [],
+            score: it.score != null ? it.score : null,
+            pointsPossible: it.pointsPossible != null ? it.pointsPossible : null,
+            canvasGrade: it.grade || "",
           });
           added++;
         }
       }
       setCourses(workingCourses);
       setAssignments(workingA);
+      if (Array.isArray(data.announcements)) setAnnouncements(data.announcements);
       const stamp = new Date().toISOString();
       setLastSync(stamp); persist("uni:lastSync", stamp);
       setSyncMsg(added || updated ? `Synced — ${added} new, ${updated} updated.` : "Synced — already up to date.");
@@ -362,6 +393,7 @@ function Carnet() {
     { id: "cards", label: "Cards", Icon: Layers },
     { id: "writing", label: "Writing", Icon: PenLine },
     { id: "gpa", label: "GPA", Icon: Calculator },
+    { id: "updates", label: "Updates", Icon: Megaphone },
   ];
 
   if (ready && !unlocked) return <LockScreen onTry={tryUnlock} />;
@@ -377,6 +409,15 @@ function Carnet() {
         .cn-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
         .cn-scroll::-webkit-scrollbar-thumb { background: ${T.line}; border-radius: 8px; }
         button { font-family: inherit; }
+        .cn-html { font-size: 14px; line-height: 1.6; color: ${T.inkSoft}; }
+        .cn-html a { color: ${T.accent}; text-decoration: underline; word-break: break-word; }
+        .cn-html p { margin: 0 0 8px; }
+        .cn-html ul, .cn-html ol { padding-left: 20px; margin: 0 0 8px; }
+        .cn-html ul { list-style: disc; }
+        .cn-html ol { list-style: decimal; }
+        .cn-html img { max-width: 100%; height: auto; border-radius: 8px; }
+        .cn-html table { border-collapse: collapse; }
+        .cn-html td, .cn-html th { border: 1px solid ${T.line}; padding: 4px 8px; }
         @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
       `}</style>
 
@@ -464,6 +505,9 @@ function Carnet() {
             )}
             {tab === "gpa" && (
               <GPAView courses={courses} grades={grades} setGrades={setGrades} go={setTab} />
+            )}
+            {tab === "updates" && (
+              <UpdatesView announcements={announcements} courses={courses} canvasEndpoint={canvasEndpoint} openImport={() => setImporting(true)} />
             )}
           </>
         )}
@@ -735,6 +779,7 @@ function CourseCard({ course, assignments, setAssignments, allAssignments, onRem
   const [title, setTitle] = useState("");
   const [due, setDue] = useState(todayISO());
   const [type, setType] = useState("Essay");
+  const [open, setOpen] = useState(null);
 
   const add = () => {
     if (!title.trim()) return;
@@ -754,6 +799,12 @@ function CourseCard({ course, assignments, setAssignments, allAssignments, onRem
           <span className="disp" style={{ fontSize: 18, fontWeight: 500 }}>{course.name}</span>
           {course.code && <span style={{ color: T.inkFaint, fontSize: 13, marginLeft: 8 }}>{course.code}</span>}
         </div>
+        {course.currentScore != null && (
+          <span title="Current grade in Canvas"
+            style={{ background: T.surface, border: `1px solid ${T.line}`, color: T.inkSoft, fontSize: 12.5, fontWeight: 700, padding: "3px 9px", borderRadius: 99 }}>
+            {Math.round(course.currentScore)}%{course.currentGrade ? ` · ${course.currentGrade}` : ""}
+          </span>
+        )}
         <button onClick={onRemove} title="Remove course" style={{ color: T.inkFaint, cursor: "pointer" }}><Trash2 size={15} /></button>
       </div>
 
@@ -765,18 +816,62 @@ function CourseCard({ course, assignments, setAssignments, allAssignments, onRem
           const days = a.due ? daysBetween(a.due, todayISO()) : null;
           const u = days === null ? null : urgency(days);
           const done = a.status === "done";
+          const files = Array.isArray(a.files) ? a.files : [];
+          const hasScore = a.score != null && a.pointsPossible != null && a.pointsPossible > 0;
+          const pct = hasScore ? Math.round((a.score / a.pointsPossible) * 100) : null;
+          const hasDetail = !!(a.description || files.length || a.score != null || a.canvasUrl);
+          const isOpen = open === a.id;
           return (
-            <div key={a.id} className="flex items-center gap-3 px-2 py-2.5" style={{ borderBottom: `1px solid ${T.line}` }}>
-              <button onClick={() => update(a.id, { status: done ? "todo" : "done" })}
-                style={{ width: 20, height: 20, borderRadius: 6, border: `1.5px solid ${done ? T.green : T.line}`, background: done ? T.green : "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
-                {done && <Check size={13} color="#fff" strokeWidth={3} />}
-              </button>
-              <div className="flex-1 min-w-0">
-                <div className="truncate" style={{ fontSize: 14.5, fontWeight: 500, textDecoration: done ? "line-through" : "none", color: done ? T.inkFaint : T.ink }}>{a.title}</div>
-                <div style={{ color: T.inkFaint, fontSize: 12 }}>{a.type} · {a.due ? `due ${a.due}` : "no date set"}</div>
+            <div key={a.id} style={{ borderBottom: `1px solid ${T.line}` }}>
+              <div className="flex items-center gap-3 px-2 py-2.5">
+                <button onClick={() => update(a.id, { status: done ? "todo" : "done" })}
+                  style={{ width: 20, height: 20, borderRadius: 6, border: `1.5px solid ${done ? T.green : T.line}`, background: done ? T.green : "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
+                  {done && <Check size={13} color="#fff" strokeWidth={3} />}
+                </button>
+                <button onClick={() => hasDetail && setOpen(isOpen ? null : a.id)} className="flex-1 min-w-0 text-left"
+                  style={{ cursor: hasDetail ? "pointer" : "default" }}>
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate" style={{ fontSize: 14.5, fontWeight: 500, textDecoration: done ? "line-through" : "none", color: done ? T.inkFaint : T.ink }}>{a.title}</span>
+                    {hasDetail && <ChevronDown size={14} style={{ color: T.inkFaint, flexShrink: 0, transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }} />}
+                  </div>
+                  <div style={{ color: T.inkFaint, fontSize: 12 }}>
+                    {a.type} · {a.due ? `due ${a.due}` : "no date set"}
+                    {files.length > 0 && <> · <Paperclip size={11} style={{ display: "inline", verticalAlign: "-1px" }} /> {files.length}</>}
+                  </div>
+                </button>
+                {hasScore && <span style={{ color: pct >= 50 ? T.green : T.red, fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap" }}>{a.score}/{a.pointsPossible}</span>}
+                {!done && !hasScore && u && <span style={{ color: u.color, fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap" }}>{u.label}</span>}
+                <button onClick={() => del(a.id)} style={{ color: T.inkFaint, cursor: "pointer" }}><X size={15} /></button>
               </div>
-              {!done && u && <span style={{ color: u.color, fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap" }}>{u.label}</span>}
-              <button onClick={() => del(a.id)} style={{ color: T.inkFaint, cursor: "pointer" }}><X size={15} /></button>
+              {isOpen && hasDetail && (
+                <div className="px-2 pb-3" style={{ marginLeft: 32 }}>
+                  {hasScore && (
+                    <div className="mb-2" style={{ fontSize: 13, color: T.inkSoft }}>
+                      Score <strong style={{ color: T.ink }}>{a.score} / {a.pointsPossible}</strong> ({pct}%
+                      {letterFromPercent(pct) ? ` · ${letterFromPercent(pct)}` : ""})
+                    </div>
+                  )}
+                  {files.length > 0 && (
+                    <div className="flex flex-col gap-1 mb-2">
+                      {files.map((f, i) => (
+                        <a key={i} href={f.url} target="_blank" rel="noopener noreferrer"
+                          className="flex items-center gap-1.5" style={{ color: T.accent, fontSize: 13, fontWeight: 600 }}>
+                          <Paperclip size={13} /> <span className="truncate">{f.name}</span>
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                  {a.description
+                    ? <div className="cn-html" dangerouslySetInnerHTML={{ __html: a.description }} />
+                    : (!hasScore && files.length === 0 && <div style={{ color: T.inkFaint, fontSize: 13 }}>No instructions provided.</div>)}
+                  {a.canvasUrl && (
+                    <a href={a.canvasUrl} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 mt-2" style={{ color: T.accent, fontSize: 13, fontWeight: 600 }}>
+                      <ExternalLink size={13} /> Open in Canvas
+                    </a>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
@@ -859,7 +954,7 @@ function GPAView({ courses, grades, setGrades, go }) {
     const have = new Set(grades.map((g) => (g.name || "").trim().toLowerCase()));
     const fresh = courses
       .filter((c) => !have.has((c.name || "").trim().toLowerCase()))
-      .map((c) => ({ id: uid(), name: c.name, code: c.code || "", credits: 3, percent: "", grade: "" }));
+      .map((c) => ({ id: uid(), name: c.name, code: c.code || "", credits: 3, percent: c.currentScore != null ? Math.round(c.currentScore) : "", grade: "" }));
     if (fresh.length) setGrades([...grades, ...fresh]);
   };
 
@@ -981,6 +1076,61 @@ function GPAView({ courses, grades, setGrades, go }) {
         <div><strong style={{ color: T.inkSoft }}>UBC scale</strong> — A+ 90–100, A 85–89, A− 80–84, B+ 76–79, B 72–75, B− 68–71, C+ 64–67, C 60–63, C− 55–59, D 50–54, F 0–49.</div>
         <div className="mt-1">GPA is weighted by credits on a 4.0 scale (A/A+ = 4.0, A− = 3.7, B+ = 3.3, B = 3.0, B− = 2.7, C+ = 2.3, C = 2.0, C− = 1.7, D = 1.0, F = 0.0). No percentage? Pick a letter by hand instead.</div>
       </div>
+    </div>
+  );
+}
+
+/* ===========================================================================
+   UPDATES  (Canvas announcements)
+=========================================================================== */
+function UpdatesView({ announcements, courses, canvasEndpoint, openImport }) {
+  const colorFor = (a) => {
+    const key = (a.code || a.course || "").toLowerCase();
+    const hit = courses.find((c) =>
+      (c.code && c.code.toLowerCase() === key) || (c.name && c.name.toLowerCase() === (a.course || "").toLowerCase()));
+    return hit ? hit.color : T.inkFaint;
+  };
+  const fmt = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d)) return "";
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " · " +
+      d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  };
+
+  if (!announcements || announcements.length === 0) {
+    return (
+      <Empty icon={Megaphone} title="No announcements yet"
+        sub={canvasEndpoint
+          ? "When your instructors post Canvas announcements, they'll land here after your next sync."
+          : "Connect Canvas to pull your course announcements into one tidy feed."}
+        action={!canvasEndpoint ? <Btn onClick={openImport}><Link2 size={15} /> Connect Canvas</Btn> : null} />
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      {announcements.map((a) => (
+        <div key={a.id} className="rounded-2xl overflow-hidden" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+          <div className="flex items-center gap-2.5 px-4 py-3" style={{ borderBottom: `1px solid ${T.line}` }}>
+            <Dot hex={colorFor(a)} size={10} />
+            <div className="flex-1 min-w-0">
+              <div className="truncate" style={{ fontSize: 15, fontWeight: 600 }}>{a.title}</div>
+              <div style={{ color: T.inkFaint, fontSize: 12 }}>
+                {a.course}{a.code ? ` · ${a.code}` : ""}{a.postedAt ? ` · ${fmt(a.postedAt)}` : ""}
+              </div>
+            </div>
+            {a.url && (
+              <a href={a.url} target="_blank" rel="noopener noreferrer" title="Open in Canvas" style={{ color: T.inkFaint }}>
+                <ExternalLink size={15} />
+              </a>
+            )}
+          </div>
+          {a.message && (
+            <div className="px-4 py-3 cn-html" dangerouslySetInnerHTML={{ __html: a.message }} />
+          )}
+        </div>
+      ))}
     </div>
   );
 }

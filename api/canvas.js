@@ -31,6 +31,31 @@ const guessType = (name = "") => {
   return "Essay";
 };
 
+// Strip anything risky out of Canvas-supplied HTML before it reaches the app.
+const sanitizeHTML = (html = "") =>
+  String(html)
+    .replace(/<\s*script[\s\S]*?<\s*\/\s*script\s*>/gi, "")
+    .replace(/<\s*style[\s\S]*?<\s*\/\s*style\s*>/gi, "")
+    .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
+    .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
+    .replace(/javascript:/gi, "");
+
+// Pull attached files / linked docs out of an assignment's HTML description.
+const extractLinks = (html = "") => {
+  const out = [];
+  const seen = new Set();
+  const re = /<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    const url = m[1];
+    if (/^(mailto:|#)/i.test(url) || seen.has(url)) continue;
+    seen.add(url);
+    const name = m[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+    out.push({ name: name || url, url });
+  }
+  return out;
+};
+
 // fetch a Canvas API path, following Link-header pagination
 async function canvasGet(base, token, path) {
   let url = base + path;
@@ -90,19 +115,33 @@ module.exports = async (req, res) => {
   try {
     // ---- Option A: full API ----
     if (base && token) {
-      const courses = await canvasGet(base, token, "/api/v1/users/self/courses?enrollment_state=active&per_page=100");
+      // include[]=total_scores gives us each course's running grade
+      const courses = await canvasGet(base, token, "/api/v1/users/self/courses?enrollment_state=active&include[]=total_scores&per_page=100");
       const outCourses = [];
       const outAssign = [];
+      const outAnnounce = [];
       for (const c of courses) {
         if (!c || !c.id) continue;
         const cname = c.name || c.course_code || "Course";
-        outCourses.push({ id: String(c.id), name: cname, code: c.course_code || "" });
+        const enr = Array.isArray(c.enrollments)
+          ? c.enrollments.find((e) => e && e.computed_current_score != null)
+          : null;
+        outCourses.push({
+          id: String(c.id),
+          name: cname,
+          code: c.course_code || "",
+          currentScore: enr && enr.computed_current_score != null ? enr.computed_current_score : null,
+          currentGrade: enr && enr.computed_current_grade ? enr.computed_current_grade : "",
+        });
+
+        // assignments — include the student's submission for scores
         let items = [];
         try {
-          items = await canvasGet(base, token, `/api/v1/courses/${c.id}/assignments?per_page=100&order_by=due_at`);
-        } catch (e) { continue; }
+          items = await canvasGet(base, token, `/api/v1/courses/${c.id}/assignments?per_page=100&order_by=due_at&include[]=submission`);
+        } catch (e) { items = []; }
         for (const a of items) {
           if (!a) continue;
+          const sub = a.submission || null;
           outAssign.push({
             canvasId: String(a.id),
             course: cname,
@@ -111,11 +150,34 @@ module.exports = async (req, res) => {
             due: a.due_at ? a.due_at.slice(0, 10) : "",
             type: guessType(a.name),
             url: a.html_url || "",
+            description: sanitizeHTML(a.description || ""),
+            files: extractLinks(a.description || ""),
+            pointsPossible: a.points_possible != null ? a.points_possible : null,
+            score: sub && sub.score != null ? sub.score : null,
+            grade: sub && sub.grade != null ? String(sub.grade) : "",
           });
         }
+
+        // announcements (newest first, capped per course)
+        try {
+          const anns = await canvasGet(base, token, `/api/v1/courses/${c.id}/discussion_topics?only_announcements=true&per_page=10`);
+          for (const an of anns) {
+            if (!an) continue;
+            outAnnounce.push({
+              id: String(an.id),
+              course: cname,
+              code: c.course_code || "",
+              title: an.title || "Announcement",
+              message: sanitizeHTML(an.message || ""),
+              postedAt: an.posted_at || an.created_at || "",
+              url: an.html_url || "",
+            });
+          }
+        } catch (e) {}
       }
+      outAnnounce.sort((a, b) => String(b.postedAt).localeCompare(String(a.postedAt)));
       res.setHeader("Cache-Control", "s-maxage=600, stale-while-revalidate=1800");
-      return res.status(200).json({ courses: outCourses, assignments: outAssign, syncedAt: new Date().toISOString() });
+      return res.status(200).json({ courses: outCourses, assignments: outAssign, announcements: outAnnounce, syncedAt: new Date().toISOString() });
     }
 
     // ---- Option B: calendar feed ----
@@ -130,7 +192,7 @@ module.exports = async (req, res) => {
         if (k && !seen.has(k)) seen.set(k, { id: k, name: a.course || a.code, code: a.code });
       }
       res.setHeader("Cache-Control", "s-maxage=600, stale-while-revalidate=1800");
-      return res.status(200).json({ courses: [...seen.values()], assignments, syncedAt: new Date().toISOString() });
+      return res.status(200).json({ courses: [...seen.values()], assignments, announcements: [], syncedAt: new Date().toISOString() });
     }
 
     return res.status(500).json({ error: "Set CANVAS_BASE_URL + CANVAS_TOKEN, or CANVAS_ICS_URL, in Vercel." });
