@@ -73,6 +73,7 @@ const ImagePlus = mkIcon([["path", { d: "M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V
 const RefreshCw = mkIcon([["path", { d: "M21 2v6h-6" }], ["path", { d: "M3 12a9 9 0 0 1 15-6.7L21 8" }], ["path", { d: "M3 22v-6h6" }], ["path", { d: "M21 12a9 9 0 0 1-15 6.7L3 16" }]]);
 const Link2 = mkIcon([["path", { d: "M9 17H7A5 5 0 0 1 7 7h2" }], ["path", { d: "M15 7h2a5 5 0 1 1 0 10h-2" }], ["line", { x1: 8, y1: 12, x2: 16, y2: 12 }]]);
 const Cloud = mkIcon([["path", { d: "M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.3 12.4 4 4 0 0 0 6 19z" }]]);
+const Calculator = mkIcon([["rect", { x: 4, y: 2, width: 16, height: 20, rx: 2 }], ["line", { x1: 8, y1: 6, x2: 16, y2: 6 }], ["line", { x1: 8, y1: 10, x2: 8, y2: 10 }], ["line", { x1: 12, y1: 10, x2: 12, y2: 10 }], ["line", { x1: 16, y1: 10, x2: 16, y2: 10 }], ["line", { x1: 8, y1: 14, x2: 8, y2: 14 }], ["line", { x1: 12, y1: 14, x2: 12, y2: 14 }], ["line", { x1: 16, y1: 14, x2: 16, y2: 18 }], ["line", { x1: 8, y1: 18, x2: 12, y2: 18 }]]);
 
 
 /* ---------------------------------------------------------------------------
@@ -106,6 +107,16 @@ const COURSE_COLORS = [
 
 const TYPES = ["Essay", "Exam", "Reading", "Quiz", "Project", "Problem set"];
 const LEITNER_DAYS = [0, 1, 3, 7, 16, 35]; // box 0..5
+
+// Standard 4.0 GPA scale. A+ caps at 4.0, which matches most schools.
+const GRADE_POINTS = {
+  "A+": 4.0, "A": 4.0, "A-": 3.7,
+  "B+": 3.3, "B": 3.0, "B-": 2.7,
+  "C+": 2.3, "C": 2.0, "C-": 1.7,
+  "D+": 1.3, "D": 1.0, "D-": 0.7,
+  "F": 0.0,
+};
+const GRADE_OPTIONS = Object.keys(GRADE_POINTS);
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -182,6 +193,7 @@ function Carnet() {
   const [cards, setCards] = useState([]);
   const [papers, setPapers] = useState([]);
   const [schedule, setSchedule] = useState([]);
+  const [grades, setGrades] = useState([]);
 
   // live Canvas connection
   const [canvasEndpoint, setCanvasEndpointState] = useState("");
@@ -211,15 +223,16 @@ function Carnet() {
 
   useEffect(() => {
     (async () => {
-      const [c, a, n, cd, p, sc] = await Promise.all([
+      const [c, a, n, cd, p, sc, g] = await Promise.all([
         loadKey("uni:courses", []),
         loadKey("uni:assignments", []),
         loadKey("uni:notes", []),
         loadKey("uni:cards", []),
         loadKey("uni:papers", []),
         loadKey("uni:schedule", []),
+        loadKey("uni:grades", []),
       ]);
-      setCourses(c); setAssignments(a); setNotes(n); setCards(cd); setPapers(p); setSchedule(sc);
+      setCourses(c); setAssignments(a); setNotes(n); setCards(cd); setPapers(p); setSchedule(sc); setGrades(g);
       const [ep, ls] = await Promise.all([loadKey("uni:canvasEndpoint", ""), loadKey("uni:lastSync", "")]);
       const hasKey = !!(ep && /[?&]key=/.test(ep));
       setCanvasEndpointState(hasKey ? ep : "");
@@ -235,6 +248,7 @@ function Carnet() {
   useEffect(() => { if (loaded.current) persist("uni:cards", cards); }, [cards]);
   useEffect(() => { if (loaded.current) persist("uni:papers", papers); }, [papers]);
   useEffect(() => { if (loaded.current) persist("uni:schedule", schedule); }, [schedule]);
+  useEffect(() => { if (loaded.current) persist("uni:grades", grades); }, [grades]);
 
   const courseById = (id) => courses.find((c) => c.id === id);
 
@@ -325,6 +339,7 @@ function Carnet() {
     { id: "notes", label: "Notes", Icon: FileText },
     { id: "cards", label: "Cards", Icon: Layers },
     { id: "writing", label: "Writing", Icon: PenLine },
+    { id: "gpa", label: "GPA", Icon: Calculator },
   ];
 
   if (ready && !unlocked) return <LockScreen onTry={tryUnlock} />;
@@ -424,6 +439,9 @@ function Carnet() {
             )}
             {tab === "writing" && (
               <WritingView courses={courses} courseById={courseById} papers={papers} setPapers={setPapers} />
+            )}
+            {tab === "gpa" && (
+              <GPAView courses={courses} grades={grades} setGrades={setGrades} go={setTab} />
             )}
           </>
         )}
@@ -758,6 +776,146 @@ function CourseCard({ course, assignments, setAssignments, allAssignments, onRem
             <Plus size={15} /> Add deadline
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================================
+   GPA CALCULATOR
+=========================================================================== */
+function gpaPoints(grade) {
+  return GRADE_POINTS.hasOwnProperty(grade) ? GRADE_POINTS[grade] : null;
+}
+
+function computeGPA(rows) {
+  let pts = 0, cr = 0;
+  for (const r of rows) {
+    const gp = gpaPoints(r.grade);
+    const credits = Number(r.credits);
+    if (gp === null || !(credits > 0)) continue;
+    pts += gp * credits;
+    cr += credits;
+  }
+  return { gpa: cr > 0 ? pts / cr : null, credits: cr };
+}
+
+function GPAView({ courses, grades, setGrades, go }) {
+  const [name, setName] = useState("");
+  const [credits, setCredits] = useState("3");
+  const [grade, setGrade] = useState("A");
+
+  const add = () => {
+    const nm = name.trim();
+    if (!nm) return;
+    setGrades([...grades, { id: uid(), name: nm, credits: Number(credits) || 0, grade }]);
+    setName(""); setCredits("3"); setGrade("A");
+  };
+  const update = (id, patch) => setGrades(grades.map((g) => (g.id === id ? { ...g, ...patch } : g)));
+  const remove = (id) => setGrades(grades.filter((g) => g.id !== id));
+
+  // Add any tracked courses that aren't already in the list, in one tap.
+  const pullCourses = () => {
+    const have = new Set(grades.map((g) => (g.name || "").trim().toLowerCase()));
+    const fresh = courses
+      .filter((c) => !have.has((c.name || "").trim().toLowerCase()))
+      .map((c) => ({ id: uid(), name: c.name, code: c.code || "", credits: 3, grade: "A" }));
+    if (fresh.length) setGrades([...grades, ...fresh]);
+  };
+
+  const { gpa, credits: totalCredits } = computeGPA(grades);
+  const untrackedCourses = courses.filter(
+    (c) => !grades.some((g) => (g.name || "").trim().toLowerCase() === (c.name || "").trim().toLowerCase())
+  );
+
+  return (
+    <div>
+      {/* result summary */}
+      <div className="rounded-2xl p-5 mb-6 flex flex-wrap items-center gap-6" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+        <div>
+          <div style={{ color: T.inkSoft, fontSize: 12, fontWeight: 600, letterSpacing: "0.02em" }}>Cumulative GPA</div>
+          <div className="disp" style={{ fontSize: 46, fontWeight: 600, lineHeight: 1.05, color: gpa === null ? T.inkFaint : T.accent }}>
+            {gpa === null ? "—" : gpa.toFixed(2)}
+          </div>
+          <div style={{ color: T.inkFaint, fontSize: 12.5 }}>on a 4.0 scale</div>
+        </div>
+        <div className="flex gap-6">
+          <div>
+            <div className="disp" style={{ fontSize: 26, fontWeight: 500 }}>{totalCredits || 0}</div>
+            <div style={{ color: T.inkFaint, fontSize: 12 }}>credits counted</div>
+          </div>
+          <div>
+            <div className="disp" style={{ fontSize: 26, fontWeight: 500 }}>{grades.length}</div>
+            <div style={{ color: T.inkFaint, fontSize: 12 }}>courses</div>
+          </div>
+        </div>
+      </div>
+
+      {/* add a course */}
+      <div className="rounded-2xl p-4 mb-6" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+          <div className="flex-1">
+            <Label>Course</Label>
+            <input style={inputStyle} value={name} placeholder="Consumer Behaviour"
+              onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} />
+          </div>
+          <div style={{ width: 110 }}>
+            <Label>Credits</Label>
+            <input style={inputStyle} type="number" min="0" step="0.5" value={credits}
+              onChange={(e) => setCredits(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} />
+          </div>
+          <div style={{ width: 110 }}>
+            <Label>Grade</Label>
+            <select style={inputStyle} value={grade} onChange={(e) => setGrade(e.target.value)}>
+              {GRADE_OPTIONS.map((g) => <option key={g}>{g}</option>)}
+            </select>
+          </div>
+          <Btn onClick={add}><Plus size={16} /> Add</Btn>
+        </div>
+        {untrackedCourses.length > 0 && (
+          <button onClick={pullCourses} className="flex items-center gap-2 mt-3 px-1"
+            style={{ color: T.accent, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+            <BookOpen size={14} /> Pull in {untrackedCourses.length} course{untrackedCourses.length > 1 ? "s" : ""} from your tracker
+          </button>
+        )}
+      </div>
+
+      {grades.length === 0 ? (
+        <Empty icon={Calculator} title="No grades yet"
+          sub="Add each course with its credit hours and the grade you got (or expect). Your GPA updates as you go."
+          action={courses.length > 0 ? <Btn kind="soft" onClick={pullCourses}><BookOpen size={15} /> Pull from courses</Btn> : null} />
+      ) : (
+        <div className="rounded-2xl overflow-hidden" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+          <div className="flex items-center gap-3 px-4 py-2.5" style={{ background: T.surfaceAlt, borderBottom: `1px solid ${T.line}`, color: T.inkSoft, fontSize: 12, fontWeight: 600, letterSpacing: "0.02em" }}>
+            <div className="flex-1">Course</div>
+            <div style={{ width: 90, textAlign: "center" }}>Credits</div>
+            <div style={{ width: 90, textAlign: "center" }}>Grade</div>
+            <div style={{ width: 56, textAlign: "right" }}>Points</div>
+            <div style={{ width: 24 }} />
+          </div>
+          {grades.map((g) => {
+            const gp = gpaPoints(g.grade);
+            return (
+              <div key={g.id} className="flex items-center gap-3 px-4 py-2.5" style={{ borderBottom: `1px solid ${T.line}` }}>
+                <input value={g.name} onChange={(e) => update(g.id, { name: e.target.value })}
+                  className="flex-1 min-w-0" style={{ background: "transparent", border: "none", fontSize: 14.5, fontWeight: 500, color: T.ink, padding: 0 }} />
+                <input type="number" min="0" step="0.5" value={g.credits}
+                  onChange={(e) => update(g.id, { credits: e.target.value === "" ? "" : Number(e.target.value) })}
+                  style={{ width: 90, textAlign: "center", background: T.surfaceAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: "5px 6px", fontSize: 14, color: T.ink }} />
+                <select value={g.grade} onChange={(e) => update(g.id, { grade: e.target.value })}
+                  style={{ width: 90, textAlign: "center", background: T.surfaceAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: "5px 6px", fontSize: 14, color: T.ink }}>
+                  {GRADE_OPTIONS.map((opt) => <option key={opt}>{opt}</option>)}
+                </select>
+                <div style={{ width: 56, textAlign: "right", color: T.inkFaint, fontSize: 13.5 }}>{gp === null ? "—" : gp.toFixed(1)}</div>
+                <button onClick={() => remove(g.id)} title="Remove" style={{ width: 24, color: T.inkFaint, cursor: "pointer" }}><X size={15} /></button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="mt-4" style={{ color: T.inkFaint, fontSize: 12, lineHeight: 1.5 }}>
+        Weighted on a 4.0 scale: A/A+ = 4.0, A− = 3.7, B+ = 3.3, B = 3.0, B− = 2.7, C+ = 2.3, C = 2.0, C− = 1.7, D+ = 1.3, D = 1.0, D− = 0.7, F = 0.0.
       </div>
     </div>
   );
