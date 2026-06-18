@@ -118,6 +118,28 @@ const GRADE_POINTS = {
 };
 const GRADE_OPTIONS = Object.keys(GRADE_POINTS);
 
+// UBC undergraduate percentage → letter scale (official ranges).
+const UBC_SCALE = [
+  { min: 90, letter: "A+" },
+  { min: 85, letter: "A" },
+  { min: 80, letter: "A-" },
+  { min: 76, letter: "B+" },
+  { min: 72, letter: "B" },
+  { min: 68, letter: "B-" },
+  { min: 64, letter: "C+" },
+  { min: 60, letter: "C" },
+  { min: 55, letter: "C-" },
+  { min: 50, letter: "D" },
+  { min: 0, letter: "F" },
+];
+const UBC_LETTERS = UBC_SCALE.map((s) => s.letter);
+function letterFromPercent(p) {
+  if (p === "" || p === null || p === undefined || isNaN(Number(p))) return "";
+  const n = Number(p);
+  for (const b of UBC_SCALE) if (n >= b.min) return b.letter;
+  return "F";
+}
+
 const uid = () => Math.random().toString(36).slice(2, 10);
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const daysBetween = (a, b) =>
@@ -788,10 +810,16 @@ function gpaPoints(grade) {
   return GRADE_POINTS.hasOwnProperty(grade) ? GRADE_POINTS[grade] : null;
 }
 
+// A row's effective letter: derived from the percentage if one is set,
+// otherwise the letter the student picked by hand.
+function rowLetter(r) {
+  return letterFromPercent(r.percent) || r.grade || "";
+}
+
 function computeGPA(rows) {
   let pts = 0, cr = 0;
   for (const r of rows) {
-    const gp = gpaPoints(r.grade);
+    const gp = gpaPoints(rowLetter(r));
     const credits = Number(r.credits);
     if (gp === null || !(credits > 0)) continue;
     pts += gp * credits;
@@ -800,16 +828,28 @@ function computeGPA(rows) {
   return { gpa: cr > 0 ? pts / cr : null, credits: cr };
 }
 
+// Letter shown as a read-only pill (when it comes from a percentage).
+function LetterPill({ letter }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 44, padding: "5px 8px", borderRadius: 8, background: letter ? T.accentSoft : "transparent", border: letter ? "none" : `1px solid ${T.line}`, color: letter ? T.accent : T.inkFaint, fontSize: 13.5, fontWeight: 700 }}>
+      {letter || "—"}
+    </span>
+  );
+}
+
+const gradeFieldStyle = { width: 96, textAlign: "center", background: T.surfaceAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: "5px 6px", fontSize: 14, color: T.ink };
+
 function GPAView({ courses, grades, setGrades, go }) {
   const [name, setName] = useState("");
   const [credits, setCredits] = useState("3");
-  const [grade, setGrade] = useState("A");
+  const [percent, setPercent] = useState("");
+  const [grade, setGrade] = useState("");
 
   const add = () => {
     const nm = name.trim();
     if (!nm) return;
-    setGrades([...grades, { id: uid(), name: nm, credits: Number(credits) || 0, grade }]);
-    setName(""); setCredits("3"); setGrade("A");
+    setGrades([...grades, { id: uid(), name: nm, credits: Number(credits) || 0, percent: percent === "" ? "" : Number(percent), grade }]);
+    setName(""); setCredits("3"); setPercent(""); setGrade("");
   };
   const update = (id, patch) => setGrades(grades.map((g) => (g.id === id ? { ...g, ...patch } : g)));
   const remove = (id) => setGrades(grades.filter((g) => g.id !== id));
@@ -819,11 +859,12 @@ function GPAView({ courses, grades, setGrades, go }) {
     const have = new Set(grades.map((g) => (g.name || "").trim().toLowerCase()));
     const fresh = courses
       .filter((c) => !have.has((c.name || "").trim().toLowerCase()))
-      .map((c) => ({ id: uid(), name: c.name, code: c.code || "", credits: 3, grade: "A" }));
+      .map((c) => ({ id: uid(), name: c.name, code: c.code || "", credits: 3, percent: "", grade: "" }));
     if (fresh.length) setGrades([...grades, ...fresh]);
   };
 
   const { gpa, credits: totalCredits } = computeGPA(grades);
+  const addLetter = letterFromPercent(percent) || grade;
   const untrackedCourses = courses.filter(
     (c) => !grades.some((g) => (g.name || "").trim().toLowerCase() === (c.name || "").trim().toLowerCase())
   );
@@ -859,16 +900,26 @@ function GPAView({ courses, grades, setGrades, go }) {
             <input style={inputStyle} value={name} placeholder="Consumer Behaviour"
               onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} />
           </div>
-          <div style={{ width: 110 }}>
+          <div style={{ width: 90 }}>
             <Label>Credits</Label>
             <input style={inputStyle} type="number" min="0" step="0.5" value={credits}
               onChange={(e) => setCredits(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} />
           </div>
-          <div style={{ width: 110 }}>
-            <Label>Grade</Label>
-            <select style={inputStyle} value={grade} onChange={(e) => setGrade(e.target.value)}>
-              {GRADE_OPTIONS.map((g) => <option key={g}>{g}</option>)}
-            </select>
+          <div style={{ width: 100 }}>
+            <Label>Grade %</Label>
+            <input style={inputStyle} type="number" min="0" max="100" value={percent} placeholder="87"
+              onChange={(e) => setPercent(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} />
+          </div>
+          <div style={{ width: 96 }}>
+            <Label>Letter</Label>
+            {percent !== "" ? (
+              <div style={{ paddingTop: 2 }}><LetterPill letter={addLetter} /></div>
+            ) : (
+              <select style={inputStyle} value={grade} onChange={(e) => setGrade(e.target.value)}>
+                <option value="">—</option>
+                {UBC_LETTERS.map((g) => <option key={g}>{g}</option>)}
+              </select>
+            )}
           </div>
           <Btn onClick={add}><Plus size={16} /> Add</Btn>
         </div>
@@ -882,19 +933,22 @@ function GPAView({ courses, grades, setGrades, go }) {
 
       {grades.length === 0 ? (
         <Empty icon={Calculator} title="No grades yet"
-          sub="Add each course with its credit hours and the grade you got (or expect). Your GPA updates as you go."
+          sub="Add each course with its credit hours and your grade out of 100 — the UBC letter fills in automatically. Your GPA updates as you go."
           action={courses.length > 0 ? <Btn kind="soft" onClick={pullCourses}><BookOpen size={15} /> Pull from courses</Btn> : null} />
       ) : (
         <div className="rounded-2xl overflow-hidden" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
           <div className="flex items-center gap-3 px-4 py-2.5" style={{ background: T.surfaceAlt, borderBottom: `1px solid ${T.line}`, color: T.inkSoft, fontSize: 12, fontWeight: 600, letterSpacing: "0.02em" }}>
             <div className="flex-1">Course</div>
             <div style={{ width: 90, textAlign: "center" }}>Credits</div>
-            <div style={{ width: 90, textAlign: "center" }}>Grade</div>
+            <div style={{ width: 100, textAlign: "center" }}>Grade %</div>
+            <div style={{ width: 96, textAlign: "center" }}>Letter</div>
             <div style={{ width: 56, textAlign: "right" }}>Points</div>
             <div style={{ width: 24 }} />
           </div>
           {grades.map((g) => {
-            const gp = gpaPoints(g.grade);
+            const letter = rowLetter(g);
+            const gp = gpaPoints(letter);
+            const hasPercent = g.percent !== "" && g.percent !== null && g.percent !== undefined;
             return (
               <div key={g.id} className="flex items-center gap-3 px-4 py-2.5" style={{ borderBottom: `1px solid ${T.line}` }}>
                 <input value={g.name} onChange={(e) => update(g.id, { name: e.target.value })}
@@ -902,10 +956,19 @@ function GPAView({ courses, grades, setGrades, go }) {
                 <input type="number" min="0" step="0.5" value={g.credits}
                   onChange={(e) => update(g.id, { credits: e.target.value === "" ? "" : Number(e.target.value) })}
                   style={{ width: 90, textAlign: "center", background: T.surfaceAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: "5px 6px", fontSize: 14, color: T.ink }} />
-                <select value={g.grade} onChange={(e) => update(g.id, { grade: e.target.value })}
-                  style={{ width: 90, textAlign: "center", background: T.surfaceAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: "5px 6px", fontSize: 14, color: T.ink }}>
-                  {GRADE_OPTIONS.map((opt) => <option key={opt}>{opt}</option>)}
-                </select>
+                <input type="number" min="0" max="100" value={hasPercent ? g.percent : ""} placeholder="—"
+                  onChange={(e) => update(g.id, { percent: e.target.value === "" ? "" : Number(e.target.value) })}
+                  style={{ width: 100, textAlign: "center", background: T.surfaceAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: "5px 6px", fontSize: 14, color: T.ink }} />
+                <div style={{ width: 96, display: "flex", justifyContent: "center" }}>
+                  {hasPercent ? (
+                    <LetterPill letter={letter} />
+                  ) : (
+                    <select value={g.grade || ""} onChange={(e) => update(g.id, { grade: e.target.value })} style={gradeFieldStyle}>
+                      <option value="">—</option>
+                      {UBC_LETTERS.map((opt) => <option key={opt}>{opt}</option>)}
+                    </select>
+                  )}
+                </div>
                 <div style={{ width: 56, textAlign: "right", color: T.inkFaint, fontSize: 13.5 }}>{gp === null ? "—" : gp.toFixed(1)}</div>
                 <button onClick={() => remove(g.id)} title="Remove" style={{ width: 24, color: T.inkFaint, cursor: "pointer" }}><X size={15} /></button>
               </div>
@@ -914,8 +977,9 @@ function GPAView({ courses, grades, setGrades, go }) {
         </div>
       )}
 
-      <div className="mt-4" style={{ color: T.inkFaint, fontSize: 12, lineHeight: 1.5 }}>
-        Weighted on a 4.0 scale: A/A+ = 4.0, A− = 3.7, B+ = 3.3, B = 3.0, B− = 2.7, C+ = 2.3, C = 2.0, C− = 1.7, D+ = 1.3, D = 1.0, D− = 0.7, F = 0.0.
+      <div className="mt-4" style={{ color: T.inkFaint, fontSize: 12, lineHeight: 1.6 }}>
+        <div><strong style={{ color: T.inkSoft }}>UBC scale</strong> — A+ 90–100, A 85–89, A− 80–84, B+ 76–79, B 72–75, B− 68–71, C+ 64–67, C 60–63, C− 55–59, D 50–54, F 0–49.</div>
+        <div className="mt-1">GPA is weighted by credits on a 4.0 scale (A/A+ = 4.0, A− = 3.7, B+ = 3.3, B = 3.0, B− = 2.7, C+ = 2.3, C = 2.0, C− = 1.7, D = 1.0, F = 0.0). No percentage? Pick a letter by hand instead.</div>
       </div>
     </div>
   );
